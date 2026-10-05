@@ -1,0 +1,8 @@
+Debug
+*.launch
+
+.vscode
+build*
+*.pdf
+.venv
+__pycache__
