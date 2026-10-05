@@ -35,6 +35,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
+ORIENT_PAGE = (60, 0x0801E000)   # beam orientation preset
 MODE_PAGE = (61, 0x0801E800)     # distance mode: 1 short, 2 long
 NODE_ID_PAGE = (62, 0x0801F000)
 RATE_PAGE = (63, 0x0801F800)     # measurement period in ms
@@ -113,6 +114,7 @@ class Probe:
                         'echo "ID [read_memory 0x%08X 32 2]"' % NODE_ID_PAGE[1],
                         'echo "RATE [read_memory 0x%08X 32 2]"' % RATE_PAGE[1],
                         'echo "MODE [read_memory 0x%08X 32 2]"' % MODE_PAGE[1],
+                        'echo "ORIENT [read_memory 0x%08X 32 2]"' % ORIENT_PAGE[1],
                         'echo "PINS [read_memory 0x%08X 32 1] [read_memory 0x%08X 32 1]"' % (GPIOB_IDR, GPIOA_IDR),
                         'echo "UID [read_memory 0x%08X 32 3]"' % UID_ADDRESS,
                         "resume"])
@@ -120,10 +122,10 @@ class Probe:
             return None
         state = {}
         for line in out.splitlines():
-            m = re.match(r"^(ID|RATE|MODE|PINS|UID) (.*)$", line.strip())
+            m = re.match(r"^(ID|RATE|MODE|ORIENT|PINS|UID) (.*)$", line.strip())
             if m:
                 state[m.group(1)] = [int(x, 16) for x in m.group(2).split()]
-        return state if {"ID", "RATE", "MODE", "PINS", "UID"} <= set(state) else None
+        return state if {"ID", "RATE", "MODE", "ORIENT", "PINS", "UID"} <= set(state) else None
 
 
 def stored_byte(words):
@@ -148,11 +150,14 @@ def describe(state):
     node = stored_byte(state["ID"])
     rate = stored_byte(state["RATE"])
     mode = stored_byte(state["MODE"])
+    orient = stored_byte(state["ORIENT"])
     uid = "".join("%08x" % w for w in reversed(state["UID"]))
-    return ("stored node ID: %s | stored distance mode: %s | stored period: %s | chip unique ID: %s" %
+    return ("stored node ID: %s | stored distance mode: %s | stored period: %s | stored beam orientation: %s | "
+            "chip unique ID: %s" %
             ("none (erased)" if node is None else node,
              {1: "short", 2: "long", 3: "auto"}.get(mode, "none (default %s)" % DEFAULT_MODE),
-             "none (default %d ms)" % DEFAULT_PERIOD_MS if rate is None else "%d ms" % rate, uid))
+             "none (default %d ms)" % DEFAULT_PERIOD_MS if rate is None else "%d ms" % rate,
+             "none (default down)" if orient is None else orient, uid))
 
 
 def main():
@@ -223,8 +228,9 @@ def main():
     else:
         if stored_byte(before["ID"]) != stored_byte(after["ID"]):
             failures.append("the stored node ID changed unexpectedly")
-        if stored_byte(before["MODE"]) != stored_byte(after["MODE"]) or stored_byte(before["RATE"]) != stored_byte(after["RATE"]):
-            failures.append("the stored distance mode or period changed unexpectedly")
+        if stored_byte(before["MODE"]) != stored_byte(after["MODE"]) or stored_byte(before["RATE"]) != stored_byte(after["RATE"]) \
+                or stored_byte(before["ORIENT"]) != stored_byte(after["ORIENT"]):
+            failures.append("the stored distance mode, period or beam orientation changed unexpectedly")
         if stored_byte(after["ID"]) is not None:
             print("   note: a node ID is stored in flash and overrides the jumpers (use --clear-node-id to remove it)")
 

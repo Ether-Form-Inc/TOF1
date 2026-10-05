@@ -17,7 +17,12 @@ Parameters:
   DIST_MODE        short (1), long (2) or auto (3). 0 = not set, which is long. Applied at once.
                    Auto starts in long mode and switches to short for near targets and back (see README).
   MEAS_PERIOD_MS   25 to 250 ms between measurements. 0 = not set, which is 100 (10 Hz). Applied at once.
-DIST_MODE accepts the words short, long and auto as well as the numbers.
+  BEAM_ORIENT      The direction the beam points, reported in every range message so the flight controller knows it.
+                   0 = not set, which is down. 1 down, 2 up, 3 forward, then horizontal beams turned to the right in
+                   45 degree steps: 4 = 45, 5 = 90 (right), 6 = 135, 7 = 180 (back), 8 = 225, 9 = 270 (left), 10 = 315.
+                   Applied at once.
+DIST_MODE accepts the words short, long and auto, and BEAM_ORIENT the words down, up, forward, right, back and left, as
+well as the numbers.
 """
 import argparse
 import sys
@@ -31,12 +36,16 @@ ap.add_argument("command", choices=["list", "get", "set", "erase", "restart"])
 ap.add_argument("args", nargs="*")
 args = ap.parse_args()
 
-WORDS = {"short": 1, "long": 2, "auto": 3}
+WORDS = {"DIST_MODE": {"short": 1, "long": 2, "auto": 3},
+         "BEAM_ORIENT": {"down": 1, "up": 2, "forward": 3, "right": 5, "back": 7, "left": 9}}
+ORIENT_NAMES = {0: "down (default)", 1: "down", 2: "up", 3: "forward", 4: "45 right", 5: "right", 6: "135 right",
+                7: "back", 8: "225 right", 9: "left", 10: "315 right"}
 
 
 def show(p):
     extra = {"DIST_MODE": {0: " (long)", 1: " (short)", 2: " (long)", 3: " (auto)"}.get(p.value, ""),
-             "MEAS_PERIOD_MS": " (100 ms)" if p.value == 0 else ""}.get(p.name, "")
+             "MEAS_PERIOD_MS": " (100 ms)" if p.value == 0 else "",
+             "BEAM_ORIENT": " (%s)" % ORIENT_NAMES.get(p.value, "?")}.get(p.name, "")
     print(f"{p.name:16s} = {p.value:4d}{extra}   max {p.max}")
 
 
@@ -53,9 +62,12 @@ def main():
     elif cmd == "set":
         if len(a) != 2:
             sys.exit("set needs a name and a value")
-        wanted = WORDS.get(a[1].lower()) if a[0] == "DIST_MODE" and not a[1].isdigit() else int(a[1])
-        if wanted is None:
-            sys.exit("DIST_MODE is short, long, auto, 0, 1, 2 or 3")
+        if a[1].lstrip("-").isdigit():
+            wanted = int(a[1])
+        else:
+            wanted = WORDS.get(a[0], {}).get(a[1].lower())
+            if wanted is None:
+                sys.exit("%s takes a number%s" % (a[0], (" or one of: " + ", ".join(WORDS[a[0]])) if a[0] in WORDS else ""))
         p = link.set(a[0], wanted)
         show(p)
         if p.value != wanted:

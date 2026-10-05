@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 using namespace Tof_config;
 
 TEST(Node_id, jumpers_add_to_the_offset)
@@ -86,30 +88,31 @@ TEST(Reading, range_status_mapping)
 TEST(Range_message, valid_reading)
 {
   uavcan_equipment_range_sensor_Measurement msg;
-  Tof_canard::make_range(35, {0, 1234, mode_long}, msg);
+  Tof_canard::make_range(35, {0, 1234, mode_long}, beam_for(orient_down), msg);
   EXPECT_EQ(msg.sensor_id, 35);
   EXPECT_EQ(msg.sensor_type, UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_SENSOR_TYPE_LIDAR);
   EXPECT_EQ(msg.reading_type, UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_READING_TYPE_VALID_RANGE);
   EXPECT_NEAR(msg.range, 1.234f, 1e-5);
   EXPECT_NEAR(msg.field_of_view, 0.4712f, 1e-3);
-  EXPECT_FALSE(msg.beam_orientation_in_body_frame.orientation_defined);
+  EXPECT_TRUE(msg.beam_orientation_in_body_frame.orientation_defined);
+  EXPECT_EQ(msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[1], -6); // pointing down
   EXPECT_EQ(msg.timestamp.usec, 0u);
 }
 
 TEST(Range_message, too_far_reports_the_longest_range_of_the_mode)
 {
   uavcan_equipment_range_sensor_Measurement msg;
-  Tof_canard::make_range(32, {2, 0, mode_long}, msg);
+  Tof_canard::make_range(32, {2, 0, mode_long}, beam_for(orient_down), msg);
   EXPECT_EQ(msg.reading_type, UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_READING_TYPE_TOO_FAR);
   EXPECT_NEAR(msg.range, 4.0f, 1e-5);
-  Tof_canard::make_range(32, {4, 0, mode_short}, msg);
+  Tof_canard::make_range(32, {4, 0, mode_short}, beam_for(orient_down), msg);
   EXPECT_NEAR(msg.range, 1.36f, 1e-5);
 }
 
 TEST(Range_message, too_close_reading)
 {
   uavcan_equipment_range_sensor_Measurement msg;
-  Tof_canard::make_range(32, {3, 5, mode_long}, msg);
+  Tof_canard::make_range(32, {3, 5, mode_long}, beam_for(orient_down), msg);
   EXPECT_EQ(msg.reading_type, UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_READING_TYPE_TOO_CLOSE);
   EXPECT_EQ(msg.range, 0.0f);
 }
@@ -117,7 +120,7 @@ TEST(Range_message, too_close_reading)
 TEST(Range_message, undefined_reading_has_no_range)
 {
   uavcan_equipment_range_sensor_Measurement msg;
-  Tof_canard::make_range(32, {7, 999, mode_long}, msg);
+  Tof_canard::make_range(32, {7, 999, mode_long}, beam_for(orient_down), msg);
   EXPECT_EQ(msg.reading_type, UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_READING_TYPE_UNDEFINED);
   EXPECT_EQ(msg.range, 0.0f);
 }
@@ -126,7 +129,7 @@ TEST(Range_message, undefined_reading_has_no_range)
 TEST(Range_message, encodes_within_maximum_size)
 {
   uavcan_equipment_range_sensor_Measurement msg;
-  Tof_canard::make_range(32, {0, 1000, mode_long}, msg);
+  Tof_canard::make_range(32, {0, 1000, mode_long}, beam_for(orient_down), msg);
   uint8_t buf[UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_MAX_SIZE] = {};
   const uint32_t len = uavcan_equipment_range_sensor_Measurement_encode(&msg, buf);
   EXPECT_EQ(len, 15u);
@@ -251,4 +254,52 @@ TEST(Auto_mode, neutral_readings_do_not_reset_the_count)
   EXPECT_EQ(a.update(2, 0, 4200), 0);
   EXPECT_EQ(a.update(3, 0, 4300), 0);
   EXPECT_EQ(a.update(2, 0, 4400), mode_long);
+}
+
+TEST(Orientation, default_is_down_and_invalid_values_fall_back_to_it)
+{
+  EXPECT_EQ(resolve_orientation(false, 0), orient_down);
+  EXPECT_EQ(resolve_orientation(true, 0), orient_down);
+  EXPECT_EQ(resolve_orientation(true, 11), orient_down);
+  EXPECT_EQ(resolve_orientation(true, 2), orient_up);
+  EXPECT_EQ(resolve_orientation(true, 10), 10);
+}
+
+TEST(Orientation, down_and_up_are_pitched_by_plus_or_minus_90_degrees)
+{
+  const Beam down = beam_for(orient_down);
+  EXPECT_EQ(down.roll, 0);
+  EXPECT_EQ(down.pitch, -6);
+  EXPECT_EQ(down.yaw, 0);
+  EXPECT_EQ(beam_for(orient_up).pitch, 6);
+}
+
+TEST(Orientation, horizontal_beams_turn_in_45_degree_steps_and_stay_in_range)
+{
+  const int8_t expected_yaw[8] = {0, 3, 6, 9, 12, 15, -6, -3}; // 0, 45, 90, 135, 180, 225, 270, 315 degrees
+  for (int n = 0; n < 8; n++)
+  {
+    const Beam b = beam_for((uint8_t)(orient_forward + n));
+    EXPECT_EQ(b.pitch, 0);
+    EXPECT_EQ(b.yaw, expected_yaw[n]);
+    EXPECT_GE(b.yaw, -16); // the coarse orientation holds 5 bit signed values
+    EXPECT_LE(b.yaw, 15);
+  }
+}
+
+// What PX4 does with the message: it multiplies by pi / 12 and checks sin(pitch)
+TEST(Orientation, encoded_down_beam_is_what_px4_recognises_as_downward_facing)
+{
+  uavcan_equipment_range_sensor_Measurement msg;
+  Tof_canard::make_range(32, {0, 1000, mode_long}, beam_for(orient_down), msg);
+  uint8_t buf[UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_MAX_SIZE] = {};
+  const uint32_t len = uavcan_equipment_range_sensor_Measurement_encode(&msg, buf);
+  uavcan_equipment_range_sensor_Measurement back = {};
+  CanardRxTransfer transfer = {};
+  transfer.payload_head = buf;
+  transfer.payload_len = (uint16_t)len;
+  ASSERT_FALSE(uavcan_equipment_range_sensor_Measurement_decode(&transfer, &back));
+  EXPECT_TRUE(back.beam_orientation_in_body_frame.orientation_defined);
+  const float pitch = back.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[1] * (3.14159265f / 12.0f);
+  EXPECT_GT(-sinf(pitch), 1.0f - 1e-5f);
 }

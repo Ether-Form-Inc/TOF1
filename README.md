@@ -30,7 +30,7 @@ From the board's schematic and PCB:
   | `uavcan.protocol.NodeStatus` | 341 | 1 Hz |
 
 - Answers `uavcan.protocol.GetNodeInfo` (name `CAN ToF Sensor`, software version 1.0, hardware version 1.0, the chip's 96-bit unique ID).
-- Has three parameters, set with the standard parameter services (`uavcan.protocol.param.GetSet` and
+- Has four parameters, set with the standard parameter services (`uavcan.protocol.param.GetSet` and
   `ExecuteOpcode`) or with `tools/can_param.py`; see Settings below. `uavcan.protocol.RestartNode`
   restarts the board.
 - Reports the distance mode in use in `NodeStatus.sub_mode` (1 short, 2 long; in auto mode the one it has chosen).
@@ -56,7 +56,7 @@ From the board's schematic and PCB:
 | `sensor_id` | the node ID |
 | `sensor_type` | `LIDAR` |
 | `field_of_view` | 27° (0.471 rad), the sensor's default 16 × 16 SPAD region of interest |
-| `beam_orientation_in_body_frame` | not defined (the board does not know how it is mounted) |
+| `beam_orientation_in_body_frame` | defined, from the `BEAM_ORIENT` parameter: pointing down by default (roll 0, pitch −90°, yaw 0), see Beam orientation |
 | `reading_type`, `range` | `VALID_RANGE` and the distance in metres when the sensor reports a good measurement; `TOO_FAR` and the longest range of the current mode (4 m long, 1.36 m short; fixed nominal values) when it saw no target or the signal was too weak; `TOO_CLOSE` and 0 when the target is below the sensor's minimum range; `UNDEFINED` and 0 for hardware errors and wrap-around |
 | `timestamp` | always 0 |
 
@@ -66,7 +66,7 @@ The VL53L1 has two distance modes, set with `DIST_MODE` (`short`, `long` or `aut
 
 | Mode | Longest range (dark, white target) | Notes |
 |---|---|---|
-| long (default) | up to about 4 m, but only with a long timing budget (ST quotes 3.6 m at 100 ms and 4 m at 200 ms) | Less immune to ambient light: in sunlight the range is much shorter. |
+| long (default) | about 3.3 m minimum and 4.1 m typical (ST's datasheet, lite mode, white target, no infrared) | Less immune to ambient light: in sunlight the range is much shorter. |
 | short | about 1.3 m | Best immunity to ambient light, so use it for outdoor ranging at low altitude. |
 
 **Auto mode** (`DIST_MODE` 3) lets the firmware choose. It is not a third sensor mode and is not stored as one:
@@ -94,8 +94,28 @@ period, long mode gave a failed reading between every pair of valid ones on the 
 every reading was valid. So the default 100 ms period runs a 50 ms budget, and a 100 ms budget needs a period of 125 ms
 or more, and the 200 ms budget one of 250 ms. A longer budget gives a steadier reading and more range, so a faster rate trades
 accuracy for update rate.
-The range figures above are from ST's documentation, at their budgets (3.6 m at 100 ms, 4 m at 200 ms). With the
-default 50 ms budget expect less than 3.6 m. For the full 4 m set `MEAS_PERIOD_MS` to 250.
+The long mode figures are from ST's VL53L1 datasheet (DS11786) for lite mode, the mode this firmware's driver
+corresponds to, with a white target (88% reflectance) in the dark; a gray target (17%) gives 1.3 m minimum and 1.7 m
+typical. The datasheet's headline of "up to 800 cm" has no specification table behind it, and its full ranging mode, which this
+firmware does not use, is specified at 3.2 m for a white target. A longer budget reaches further, so for the most
+range set `MEAS_PERIOD_MS` to 250 (a 200 ms budget).
+
+### Beam orientation
+
+Every `Measurement` says which way the beam points, in `beam_orientation_in_body_frame`, which PX4 uses to give the
+distance sensor its rotation. It is set with the `BEAM_ORIENT` parameter, and the default is **down**:
+
+| `BEAM_ORIENT` | Beam | Roll, pitch, yaw sent |
+|---|---|---|
+| 0 (not set) or 1 | down | 0°, −90°, 0° |
+| 2 | up | 0°, +90°, 0° |
+| 3 | forward | 0°, 0°, 0° |
+| 4 to 10 | horizontal, turned right by 45°, 90°, 135°, 180°, 225°, 270° (= left) or 315° | 0°, 0°, yaw |
+
+The angles are sent in the DroneCAN coarse orientation form: multiples of 15° (π/12 rad), so 90° is 6. These
+presets are the directions PX4 recognises; it treats other angles as a custom rotation. Change it with
+`tools/can_param.py <node id> set BEAM_ORIENT down|up|forward|right|back|left` (or a number); it takes effect at once
+and is stored in flash.
 
 ## Node ID and settings
 
@@ -120,14 +140,15 @@ Each fitted jumper draws about 0.28 mA, through the 10 kΩ pull-up (2.8 V / 10 k
   value is ignored and the jumpers are used.
 - Flash page 63 (byte at `0x0801F800`) holds the measurement period in milliseconds (20 to 250, default 100).
 - Flash page 61 (byte at `0x0801E800`) holds the distance mode (1 short, 2 long, 3 auto, default long).
-- The linker script limits the application to the space below `0x0801E800`, so a build that grows into these
-  pages fails to link. The image is about 87 KB, which leaves roughly 35 KB of headroom.
+- Flash page 60 (byte at `0x0801E000`) holds the beam orientation (1 to 10, default down).
+- The linker script limits the application to the space below `0x0801E000`, so a build that grows into these
+  pages fails to link. The image is about 87 KB, which leaves roughly 33 KB of headroom.
 
 Erased flash (all `0xFF`) means "not set".
 
 ### Setting the parameters over CAN
 
-The node has three integer parameters, each stored in the flash page above. 0 means "not set", which gives the
+The node has four integer parameters, each stored in the flash page above. 0 means "not set", which gives the
 default. They can be changed with any DroneCAN tool that speaks the parameter services, or with
 `tools/can_param.py`:
 
@@ -148,7 +169,7 @@ python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt   # onc
 - Values out of range are ignored and the reply shows the value that is actually stored.
 - Writing erases a flash page, which stops the processor for a few tens of milliseconds, so don't do it
   while the aircraft depends on the range data.
-- `ExecuteOpcode` save is accepted (values are stored immediately) and erase clears all three settings.
+- `ExecuteOpcode` save is accepted (values are stored immediately) and erase clears all four settings.
 
 ## Building
 

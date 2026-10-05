@@ -72,8 +72,11 @@ int main(void)
   const bool have_period = Stm_settings::read(Stm_settings::update_rate, value);
   const uint16_t period_ms = Tof_config::resolve_period_ms(have_period, value);
 
+  const bool have_orientation = Stm_settings::read(Stm_settings::beam_orientation, value);
+  const uint8_t orientation = Tof_config::resolve_orientation(have_orientation, value);
+
   // This needs to be static as we will blow through the stack otherwise
-  static Canard_tof_node node{can_id, mode, period_ms};
+  static Canard_tof_node node{can_id, mode, period_ms, orientation};
 
   // Serves the CAN node and the sensor forever
   node.run();

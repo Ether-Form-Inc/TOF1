@@ -64,6 +64,24 @@ def half(v):
     return struct.unpack("<e", struct.pack("<H", v))[0]
 
 
+def msb_bits(data, off, n, signed=False):
+    """A field of n <= 8 bits that starts at bit `off` of the DroneCAN bit stream, where bit 0 is the top bit of
+    byte 0 and a field is written most significant bit first."""
+    v = 0
+    for i in range(n):
+        v = v << 1 | (data[(off + i) // 8] >> (7 - (off + i) % 8) & 1)
+    return v - (1 << n) if signed and v >> (n - 1) else v
+
+
+def beam_text(p):
+    """The beam orientation of a Measurement payload, as text."""
+    roll, pitch, yaw = (msb_bits(p, 64 + 5 * i, 5, True) for i in range(3))
+    if not msb_bits(p, 79, 1):
+        return "not defined"
+    return "roll %d, pitch %d, yaw %d degrees" % (roll * 15, pitch * 15, yaw * 15) + \
+        (" (down)" if pitch == -6 else " (up)" if pitch == 6 else "")
+
+
 def decode_range(p):
     # Field layout from uavcan.equipment.range_sensor.Measurement (1050): timestamp 56, sensor_id 8,
     # CoarseOrientation 16 (3 x int5 + bool), field_of_view float16, sensor_type 5 + reading_type 3, range float16.
@@ -75,6 +93,7 @@ def decode_range(p):
     out["sensor_type"] = bits(p, o, 8) >> 3
     out["reading"] = ["undefined", "valid", "too_close", "too_far"][bits(p, o, 8) & 7]; o += 8
     out["range_m"] = round(half(bits(p, o, 16)), 3)
+    out["beam"] = beam_text(p)
     return out
 
 

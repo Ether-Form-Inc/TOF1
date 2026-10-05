@@ -28,8 +28,8 @@ extern "C"
 class Canard_tof_node
 {
 public:
-  Canard_tof_node(uint8_t node_id, uint8_t mode, uint16_t period_ms)
-      : node_id(node_id), configured_mode(mode), period_ms(period_ms)
+  Canard_tof_node(uint8_t node_id, uint8_t mode, uint16_t period_ms, uint8_t orientation)
+      : node_id(node_id), configured_mode(mode), period_ms(period_ms), beam(Tof_config::beam_for(orientation))
   {
     auto_mode.reset(0);
   }
@@ -148,6 +148,7 @@ private:
   //   NODE_ID         0 to 127. Used from the next start.
   //   DIST_MODE       0 (default, long), 1 short, 2 long, 3 auto (see Tof_config::Auto_mode). Applied at once.
   //   MEAS_PERIOD_MS  0 (default, 100) or 25 to 250. Applied at once.
+  //   BEAM_ORIENT     0 (default, down), 1 down, 2 up, 3 to 10 horizontal turned (n - 3) * 45 degrees. Applied at once.
   struct Param
   {
     const char *name;
@@ -164,18 +165,23 @@ private:
   {
     return v >= 0 && v <= Tof_config::mode_auto;
   }
+  static bool valid_orientation(int64_t v)
+  {
+    return v >= 0 && v <= Tof_config::orient_max;
+  }
   static bool valid_period(int64_t v)
   {
     return v == 0 || (v >= Tof_config::min_period_ms && v <= Tof_config::max_period_ms);
   }
 
-  static constexpr int param_count = 3;
+  static constexpr int param_count = 4;
   static const Param &param(int i)
   {
     static const Param params[param_count] = {
         {"NODE_ID", Stm_settings::node_id, 127, valid_node_id},
         {"DIST_MODE", Stm_settings::distance_mode, Tof_config::mode_auto, valid_mode},
         {"MEAS_PERIOD_MS", Stm_settings::update_rate, Tof_config::max_period_ms, valid_period},
+        {"BEAM_ORIENT", Stm_settings::beam_orientation, Tof_config::orient_max, valid_orientation},
     };
     return params[i];
   }
@@ -241,9 +247,13 @@ private:
           {
             Stm_settings::write(p.setting, (uint8_t)wanted);
           }
-          if (found != 0)
+          if (found == 1 || found == 2)
           {
             reconfigure_pending = true; // the sensor settings take effect at once
+          }
+          else if (found == 3)
+          {
+            reload_orientation();
           }
         }
       }
@@ -282,13 +292,14 @@ private:
     }
     else if (req.opcode == UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_REQUEST_OPCODE_ERASE)
     {
-      // Back to the defaults: the jumper selected ID, long mode, 10 Hz
+      // Back to the defaults: the jumper selected ID, long mode, 10 Hz, beam pointing down
       res.ok = true;
       for (int i = 0; i < param_count; i++)
       {
         res.ok = Stm_settings::erase(param(i).setting) && res.ok;
       }
       reconfigure_pending = true;
+      reload_orientation();
     }
 
     uint8_t buf[UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_RESPONSE_MAX_SIZE] = {};
@@ -475,6 +486,12 @@ private:
     auto_mode.reset(HAL_GetTick());
   }
 
+  void reload_orientation()
+  {
+    uint8_t v;
+    beam = Tof_config::beam_for(Tof_config::resolve_orientation(Stm_settings::read(Stm_settings::beam_orientation, v), v));
+  }
+
   // The mode the sensor runs in: the configured one, or whichever of short and long auto mode has chosen
   uint8_t sensor_mode() const
   {
@@ -544,7 +561,7 @@ private:
 
     static uavcan_equipment_range_sensor_Measurement msg;
     static uint8_t buf[UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_MAX_SIZE];
-    Tof_canard::make_range(node_id, sample, msg);
+    Tof_canard::make_range(node_id, sample, beam, msg);
     memset(buf, 0, sizeof(buf));
     const uint32_t len = uavcan_equipment_range_sensor_Measurement_encode(&msg, buf
 #if CANARD_ENABLE_TAO_OPTION
@@ -576,6 +593,7 @@ private:
   Tof_config::Auto_mode auto_mode;
   uint8_t skip_readings{0};
   uint16_t period_ms;
+  Tof_config::Beam beam; // the beam direction in the messages
   Stm_fdcan fdcan;
   Stm_tof tof;
 

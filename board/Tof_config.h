@@ -32,6 +32,49 @@ constexpr uint8_t mode_long = 2;
 constexpr uint8_t mode_auto = 3;
 constexpr uint8_t default_mode = mode_long;
 
+// Direction the beam points, as a preset. This is what the BEAM_ORIENT parameter holds; 0 (not set) is the
+// default, which is down. PX4 reads the orientation from every range message and turns it into one of its sensor
+// rotations: down, up, or horizontal in 45 degree steps of yaw. Other angles it treats as a custom rotation, so
+// the presets are the directions it knows by name.
+constexpr uint8_t orient_down = 1;
+constexpr uint8_t orient_up = 2;
+constexpr uint8_t orient_forward = 3; // then 3 + n for a horizontal beam turned n * 45 degrees to the right (yaw)
+constexpr uint8_t orient_max = 10;    // 3 + 7: 315 degrees
+constexpr uint8_t default_orientation = orient_down;
+
+inline uint8_t resolve_orientation(bool have_stored, uint8_t stored)
+{
+  return (have_stored && stored >= orient_down && stored <= orient_max) ? stored : default_orientation;
+}
+
+// The roll, pitch and yaw of the beam in the DroneCAN "coarse orientation" form: whole multiples of 15 degrees
+// (pi / 12 rad) from -16 to 15, so 90 degrees is 6. Roll cannot change where a beam points and is always 0. A beam
+// pointing down is pitched down by 90 degrees (-6) and one pointing up is pitched up by 90 degrees (+6).
+struct Beam
+{
+  int8_t roll;
+  int8_t pitch;
+  int8_t yaw;
+};
+
+inline Beam beam_for(uint8_t orientation)
+{
+  if (orientation == orient_down)
+  {
+    return {0, -6, 0};
+  }
+  if (orientation == orient_up)
+  {
+    return {0, 6, 0};
+  }
+  int yaw = (orientation - orient_forward) * 3; // 45 degrees is 3 units, a full turn is 24
+  if (yaw > 15)
+  {
+    yaw -= 24;
+  }
+  return {0, 0, (int8_t)yaw};
+}
+
 // Time between measurements in milliseconds. 25 ms is the fastest that leaves the headroom described at
 // timing_budget_ms() below over the sensor's shortest timing budget of 20 ms.
 constexpr uint16_t min_period_ms = 25;

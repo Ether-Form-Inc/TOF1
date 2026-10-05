@@ -66,11 +66,30 @@ def half(v):
     return struct.unpack("<e", struct.pack("<H", v))[0]
 
 
+def msb_bits(data, off, n, signed=False):
+    """A field of n <= 8 bits that starts at bit `off` of the DroneCAN bit stream, where bit 0 is the top bit of
+    byte 0 and a field is written most significant bit first."""
+    v = 0
+    for i in range(n):
+        v = v << 1 | (data[(off + i) // 8] >> (7 - (off + i) % 8) & 1)
+    return v - (1 << n) if signed and v >> (n - 1) else v
+
+
+def beam_text(p):
+    """The beam orientation of a Measurement payload, as text."""
+    roll, pitch, yaw = (msb_bits(p, 64 + 5 * i, 5, True) for i in range(3))
+    if not msb_bits(p, 79, 1):
+        return "not defined"
+    return "roll %d, pitch %d, yaw %d degrees" % (roll * 15, pitch * 15, yaw * 15) + \
+        (" (down)" if pitch == -6 else " (up)" if pitch == 6 else "")
+
+
 def decode_range(p):
     """Layout of uavcan.equipment.range_sensor.Measurement: timestamp 56, sensor_id 8, orientation 16,
     field_of_view float16, sensor_type 5 + reading_type 3 (sub-byte fields are packed from the top of the byte),
     range float16."""
-    return {"sensor_id": bits(p, 56, 8), "reading": READINGS[bits(p, 96, 8) & 7], "range_m": half(bits(p, 104, 16))}
+    return {"sensor_id": bits(p, 56, 8), "reading": READINGS[bits(p, 96, 8) & 7], "range_m": half(bits(p, 104, 16)),
+            "beam": beam_text(p)}
 
 
 def frames(buf):
@@ -113,6 +132,7 @@ port.reset_input_buffer()
 buf = bytearray()
 transfers = {}
 mode = None            # the node's latest reported mode: 1 or 2
+beam = None            # the beam orientation in the latest reading
 health = None
 counts = collections.Counter()
 crc_errors = 0
@@ -146,6 +166,9 @@ try:
                 now = time.time()
                 last_data = now
                 counts[r["reading"]] += 1
+                if r["beam"] != beam:
+                    print(color(">>> beam orientation: %s" % r["beam"], "1;36"), flush=True)
+                    beam = r["beam"]
                 if not args.quiet:
                     # A TOO_FAR reading carries the longest range of its own mode
                     own = {1.36: "short", 4.0: "long"}.get(round(r["range_m"], 2)) if r["reading"] == "too_far" else None

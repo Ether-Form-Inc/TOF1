@@ -17,6 +17,7 @@ struct Setting
   uint32_t address;
 };
 
+constexpr Setting beam_orientation{60, 0x0801E000}; // beam direction preset, 1 to 10
 constexpr Setting distance_mode{61, 0x0801E800}; // VL53L1 distance mode: 1 short, 2 long
 constexpr Setting node_id{62, 0x0801F000};       // node ID override, 1 to 127
 constexpr Setting update_rate{63, 0x0801F800};   // measurement period, ms (20 to 250)

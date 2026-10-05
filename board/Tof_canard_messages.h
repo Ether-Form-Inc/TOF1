@@ -25,13 +25,17 @@ struct Sample
   uint8_t mode; // Tof_config::mode_short or mode_long
 };
 
-inline void make_range(uint8_t sensor_id, const Sample &s, uavcan_equipment_range_sensor_Measurement &msg)
+inline void make_range(uint8_t sensor_id, const Sample &s, const Tof_config::Beam &beam,
+                       uavcan_equipment_range_sensor_Measurement &msg)
 {
   memset(&msg, 0, sizeof(msg));
 
   // Network synchronised time is not available, so timestamp stays zero (unknown)
   msg.sensor_id = sensor_id;
-  msg.beam_orientation_in_body_frame.orientation_defined = false;
+  msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[0] = beam.roll;
+  msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[1] = beam.pitch;
+  msg.beam_orientation_in_body_frame.fixed_axis_roll_pitch_yaw[2] = beam.yaw;
+  msg.beam_orientation_in_body_frame.orientation_defined = true;
   msg.field_of_view = field_of_view_rad;
   msg.sensor_type = UAVCAN_EQUIPMENT_RANGE_SENSOR_MEASUREMENT_SENSOR_TYPE_LIDAR;
 
